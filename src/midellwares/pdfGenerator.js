@@ -7,8 +7,7 @@ exports.generateAndSaveInvoice = async ({ html, code }) => {
   try {
     // Launch Puppeteer with the new headless mode
     const browser = await puppeteer.launch({
-      ignoreDefaultArgs: ["--disable-extensions"],
-      headless: "new", // Use the new headless mode
+      args: ["--no-sandbox", "--disable-setuid-sandbox"], // Use the new headless mode
     });
 
     const page = await browser.newPage();
