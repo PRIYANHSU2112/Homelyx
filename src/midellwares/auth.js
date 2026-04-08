@@ -1,4 +1,5 @@
 const userModel = require("../models/userModel");
+const partnerProfileModel = require("../models/partnerProfileModel");
 const { userType } = require("../helper/userType");
 const jwt = require("jsonwebtoken");
 function validateMobileNumber(number) {
@@ -198,5 +199,67 @@ exports.optional = async (req, res, next) => {
     req.user = null;
     req.User = null;
     next();
+  }
+};
+
+// =========================== Partner Route Check ======================= ||
+
+exports.partnerRoute = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({
+        success: false,
+        message: "Token required",
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "JWT token missing",
+      });
+    }
+
+    const decodeToken = jwt.verify(token, "SECRETEKEY");
+
+    if (!decodeToken || !decodeToken.User) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token",
+      });
+    }
+
+    const User = await userModel.findById(decodeToken.User);
+
+    if (!User) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Find partner profile linked to this user
+    const partner = await partnerProfileModel.findOne({ userId: User._id });
+
+    if (!partner) {
+      return res.status(403).json({
+        success: false,
+        message: "Partner profile not found",
+      });
+    }
+
+    req.user = User;
+    req.User = User;
+    req.partner = partner;
+    req.partnerProfile = partner;
+
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      message: "Token expired or invalid",
+    });
   }
 };

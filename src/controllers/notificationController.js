@@ -1,7 +1,12 @@
 const { userType } = require("../helper/userType");
 const notificationModel = require("../models/notificationModel");
 const admin = require("firebase-admin");
-const serviceAccount = require("../../config/serviceAccount.json");
+let serviceAccount = null;
+try {
+  serviceAccount = require("../../config/serviceAccount.json");
+} catch (e) {
+  console.warn("⚠️ Firebase serviceAccount.json not found — push notifications disabled");
+}
 const userModel = require("../models/userModel");
 const orderModel = require("../models/ecommerce/orderModel");
 const orderService = require("../models/orderModel");
@@ -9,7 +14,7 @@ const { OrderCreate } = require("../helper/notificationMessage");
 
 
 
-if (!admin.apps.length) {
+if (!admin.apps.length && serviceAccount) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
   });
