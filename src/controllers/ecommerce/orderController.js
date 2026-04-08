@@ -12,6 +12,7 @@ const crypto = require("crypto");
 const { razorpay } = require("../../../config/razorpay");
 const couponUsed = require("../../models/isUsedCouponModel");
 const couponModel = require("../../models/couponModel");
+const mongoose = require("mongoose");
 const {
   sendNotificationAdminAndSubAdminAfterOrderCreate,
   sendNotificationAdminAndSubAdmin,
@@ -26,7 +27,7 @@ const {
 const { local } = require("../../helper/shipping");
 const transactionModel = require("../../models/ecommerce/transactionModel");
 const { updateVariantStockAndSold } = require("../../helper/productVariantStock");
-const mongoose = require("mongoose");
+const { settlePartnerOrder } = require("../../helper/partnerSettlement");
 
 const dotenv = require("dotenv");
 const { features } = require("process");
@@ -603,6 +604,77 @@ exports.updateSingleStatus = async (req, res) => {
       { new: true }
     );
 
+    const targetStatus = req.body.status;
+    const isMaster = !statusUpdate.parentOrderId;
+
+    if (["CANCELLED", "DELIVERED", "SHIPPED", "RETURNED"].includes(targetStatus)) {
+      if (isMaster) {
+        // Refined Sync to ALL Sub-Orders that contain this product
+        const affectedSubOrders = await orderModel.find({
+          parentOrderId: req.Order._id,
+          "product.productId": req.query.productId
+        });
+
+        for (let sub of affectedSubOrders) {
+          sub.product.forEach(p => {
+            if (p.productId.toString() === req.query.productId.toString()) {
+              p.status = targetStatus;
+            }
+          });
+
+          // Correct Overall Status Calculation for Sub-Order
+          const subStatuses = sub.product.map(p => p.status);
+          const uniqueSubStatuses = [...new Set(subStatuses)];
+          sub.status = uniqueSubStatuses.length === 1 ? uniqueSubStatuses[0] : "MULTI_STATUS";
+          
+          await sub.save();
+        }
+      } else {
+        // Sync back to Master Order
+        const masterOrder = await orderModel.findById(statusUpdate.parentOrderId);
+        if (masterOrder) {
+          masterOrder.product.forEach(p => {
+            if (p.productId.toString() === req.query.productId.toString()) {
+              p.status = targetStatus;
+            }
+          });
+          // Recalculate Master Status
+          const masterStatuses = masterOrder.product.map(p => p.status);
+          const uniqueMasterStatuses = [...new Set(masterStatuses)];
+          masterOrder.status = uniqueMasterStatuses.length === 1 ? uniqueMasterStatuses[0] : "MULTI_STATUS";
+          await masterOrder.save();
+        }
+      }
+    }
+
+    // ── Partner Settlement on DELIVERED ──
+    if (targetStatus === "DELIVERED") {
+      try {
+        if (statusUpdate.partnerId) {
+          // Calculate partner's gross amount from delivered products
+          const deliveredItems = statusUpdate.product.filter(p => p.status === "DELIVERED");
+          const partnerGross = deliveredItems.reduce((sum, p) => sum + (p.price || 0), 0);
+
+          if (partnerGross > 0) {
+            const avgCommission = deliveredItems.length > 0
+              ? deliveredItems.reduce((sum, p) => sum + (p.adminCommission || 0), 0) / deliveredItems.length
+              : 0;
+
+            await settlePartnerOrder({
+              partnerId: statusUpdate.partnerId,
+              orderId: statusUpdate._id,
+              orderType: "ECOMMERCE",
+              amount: partnerGross,
+              commissionPercent: avgCommission,
+              description: `eCommerce order ${statusUpdate.orderId || statusUpdate._id} delivered`,
+            });
+          }
+        }
+      } catch (settlementErr) {
+        console.error("⚠️ Settlement error (updateSingleStatus):", settlementErr.message);
+      }
+    }
+
     await sendNotificationUserOnStatusUpdate(statusUpdate, status);
     return res.status(200).json({
       success: true,
@@ -678,6 +750,30 @@ exports.updateAllProductStatus = async (req, res) => {
       },
       { new: true }
     )
+
+      // ── Partner Settlement on DELIVERED (updateAllProductStatus) ──
+      try {
+        if (statusUpdate.partnerId) {
+          const partnerGross = statusUpdate.product.reduce((sum, p) => sum + (p.price || 0), 0);
+
+          if (partnerGross > 0) {
+            const avgCommission = statusUpdate.product.length > 0
+              ? statusUpdate.product.reduce((sum, p) => sum + (p.adminCommission || 0), 0) / statusUpdate.product.length
+              : 0;
+
+            await settlePartnerOrder({
+              partnerId: statusUpdate.partnerId,
+              orderId: statusUpdate._id,
+              orderType: "ECOMMERCE",
+              amount: partnerGross,
+              commissionPercent: avgCommission,
+              description: `eCommerce order ${statusUpdate.orderId || statusUpdate._id} delivered (all products)`,
+            });
+          }
+        }
+      } catch (settlementErr) {
+        console.error("⚠️ Settlement error (updateAllProductStatus):", settlementErr.message);
+      }
     }
 
     sendNotificationUserOnStatusUpdate(statusUpdate, status);

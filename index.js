@@ -181,6 +181,8 @@ const routes = [
   "./src/routes/platformFeeRoute.js",
   "./src/routes/refundRoute.js",
   "./src/routes/bankRoute.js",
+  "./src/routes/partnerWalletRoute.js",
+  "./src/routes/adminCommissionRoute.js",
 ];
 
 routes.forEach((routePath) => {

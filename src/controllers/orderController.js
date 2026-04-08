@@ -10,6 +10,8 @@ const { userType } = require("../helper/userType");
 const { invoice } = require("../midellwares/invoice");
 const { OrderService } = require("../helper/status");
 const { local } = require("../helper/shipping");
+const { settlePartnerOrder } = require("../helper/partnerSettlement");
+const companyModel = require("../models/commpanyModel");
 
 const {
   sendNotificationCreateSurviceAdminAndSubAdmin,
@@ -68,7 +70,7 @@ exports.getOrderId = async (req, res, next, id) => {
 
 exports.createOrder = async (req, res) => {
   try {
-    console.log("CREATE ORDER FUNCTION CALLED");
+    // console.log("CREATE ORDER FUNCTION CALLED");
     const {
       customerId,
       cityId,
@@ -162,7 +164,7 @@ exports.createOrder = async (req, res) => {
       let per = await productModel
         .findByIdAndUpdate({ _id: Cart[i]?.productId?._id })
         .populate("taxId");
-      console.log("DKDDDKDKKDDDDDDDDDDDDDDDDDDD");
+      // console.log("DKDDDKDKKDDDDDDDDDDDDDDDDDDD");
       obj = {};
       obj.image = Cart[i]?.image;
       obj.productId = Cart[i]?.productId;
@@ -386,6 +388,29 @@ exports.updateCompletedStatus = async (req, res) => {
       )
       .populate("customerId")
       .populate("partnerId");
+
+    // ── Partner Settlement on COMPLETED ──
+    if (updateOrder.partnerId) {
+      try {
+        const company = await companyModel.findOne().select("adminCharge").lean();
+        const commissionPercent = company?.adminCharge || 0;
+        const partnerGross = updateOrder.orderTotal || 0;
+
+        if (partnerGross > 0) {
+          await settlePartnerOrder({
+            partnerId: updateOrder.partnerId._id || updateOrder.partnerId,
+            orderId: updateOrder._id,
+            orderType: "SERVICE",
+            amount: partnerGross,
+            commissionPercent,
+            description: `Service order ${updateOrder._id} completed`,
+          });
+        }
+      } catch (settlementErr) {
+        console.error("⚠️ Settlement error (service order):", settlementErr.message);
+      }
+    }
+
     // updateOrder?.customerId?.email
     //   ?
     sendMailOTP(
