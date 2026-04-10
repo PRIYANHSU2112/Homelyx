@@ -1256,3 +1256,463 @@ exports.getAllSubCategory = async (req, res) => {
     });
   }
 };
+
+// ==================== PARTNER ROUTES ====================
+
+// Partner creates category (status: pending)
+exports.partnerCreateCategory = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    const {
+      name,
+      pCategory,
+      cityId,
+      price,
+      description,
+      workExperience,
+      disable,
+    } = req.body;
+
+    // Validate partnerId
+    if (!mongoose.Types.ObjectId.isValid(partnerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid partnerId",
+      });
+    }
+
+    // Partner cannot create parent category
+    if (!pCategory) {
+      return res.status(403).json({
+        success: false,
+        message: "Partner can only create sub-categories, not parent categories",
+      });
+    }
+
+    // Verify parent category exists
+    const parentCategory = await categoryModel.findById(pCategory);
+    if (!parentCategory) {
+      return res.status(404).json({
+        success: false,
+        message: "Parent category not found",
+      });
+    }
+
+    // Verify parent category is not created by partner
+    if (parentCategory.partnerId) {
+      return res.status(403).json({
+        success: false,
+        message: "Cannot use a partner-created category as parent",
+      });
+    }
+
+    let bannerArr = [];
+    let imagesArr = [];
+    let videosArr = [];
+    let icon = null;
+
+    // -------- MEDIA HANDLING --------
+    if (req.files) {
+      if (req.files.icon?.length) {
+        icon = req.files.icon[0].key;
+      }
+
+      if (req.files.banner?.length) {
+        req.files.banner.forEach((file) => {
+          bannerArr.push({
+            type: file.mimetype === "video/mp4" ? "VIDEO" : "IMAGE",
+            url: file.key,
+          });
+        });
+      }
+
+      if (req.files.images?.length) {
+        imagesArr = req.files.images.map((file) => file.key);
+      }
+
+      if (req.files.videos?.length) {
+        videosArr = req.files.videos.map((file) => file.key);
+      }
+    }
+
+    // -------- VALIDATION --------
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: "Category name is required",
+      });
+    }
+
+    // -------- SLUG --------
+    const slug = await generateCategorySlug(
+      "category",
+      parentCategory.name,
+      "sub-category",
+      name.toLowerCase(),
+    );
+
+    // -------- CREATE CATEGORY (PENDING) --------
+    const category = await categoryModel.create({
+      name,
+      pCategory,
+      cityId,
+      price,
+      description,
+      workExperience,
+      disable: disable || false,
+      icon,
+      banner: bannerArr,
+      images: imagesArr,
+      videos: videosArr,
+      slug,
+      partnerId: new mongoose.Types.ObjectId(partnerId),
+      categoryStatus: "pending", // Set to pending for partner-created categories
+      totalRating: 0,
+      avgRating: 0,
+      reviews: [],
+    });
+
+    return res.status(201).json({
+      success: true,
+      message:
+        "Category created successfully. Awaiting admin approval.",
+      data: category,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// Partner get their own categories
+exports.partnerGetMyCategories = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    const { page = 1, limit = 20, categoryStatus } = req.query;
+
+    // Validate partnerId
+    if (!mongoose.Types.ObjectId.isValid(partnerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid partnerId",
+      });
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    let filter = {
+      partnerId: new mongoose.Types.ObjectId(partnerId),
+    };
+
+    if (categoryStatus) {
+      filter.categoryStatus = categoryStatus;
+    }
+
+    const total = await categoryModel.countDocuments(filter);
+
+    const categories = await categoryModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate("pCategory", "name")
+      .populate("cityId", "cityName");
+
+    return res.status(200).json({
+      success: true,
+      message: "Partner categories fetched successfully",
+      data: categories,
+      pagination: {
+        totalRecords: total,
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(total / parseInt(limit)),
+        pageSize: parseInt(limit),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// Partner update their own category (only if pending)
+exports.partnerUpdateCategory = async (req, res) => {
+  try {
+    const { categoryId, partnerId } = req.params;
+    const {
+      name,
+      cityId,
+      price,
+      description,
+      workExperience,
+      disable,
+    } = req.body;
+
+    // Validate IDs
+    if (
+      !mongoose.Types.ObjectId.isValid(categoryId) ||
+      !mongoose.Types.ObjectId.isValid(partnerId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid categoryId or partnerId",
+      });
+    }
+
+    const category = await categoryModel.findById(categoryId);
+
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        message: "Category not found",
+      });
+    }
+
+    // Verify ownership
+    if (category.partnerId.toString() !== partnerId) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only update your own categories",
+      });
+    }
+
+    // Can only update if pending
+    if (category.categoryStatus !== "pending") {
+      return res.status(403).json({
+        success: false,
+        message: `Cannot update ${category.categoryStatus} category. Only pending categories can be updated.`,
+      });
+    }
+
+    let bannerArr = category.banner || [];
+    let imagesArr = category.images || [];
+    let videosArr = category.videos || [];
+    let icon = category.icon;
+
+    // -------- MEDIA HANDLING --------
+    if (req.files) {
+      if (req.files.icon?.length) {
+        if (category.icon) {
+          deleteFileFromObjectStorage(category.icon);
+        }
+        icon = req.files.icon[0].key;
+      }
+
+      if (req.files.banner?.length) {
+        req.files.banner.forEach((file) => {
+          bannerArr.push({
+            type: file.mimetype === "video/mp4" ? "VIDEO" : "IMAGE",
+            url: file.key,
+          });
+        });
+      }
+
+      if (req.files.images?.length) {
+        imagesArr.push(...req.files.images.map((file) => file.key));
+      }
+
+      if (req.files.videos?.length) {
+        videosArr.push(...req.files.videos.map((file) => file.key));
+      }
+    }
+
+    // -------- UPDATE CATEGORY --------
+    const updatedCategory = await categoryModel
+      .findByIdAndUpdate(
+        categoryId,
+        {
+          $set: {
+            name: name ?? category.name,
+            cityId: cityId || category.cityId,
+            price: price ?? category.price,
+            description: description ?? category.description,
+            workExperience: workExperience ?? category.workExperience,
+            disable: disable ?? category.disable,
+            icon,
+            banner: bannerArr,
+            images: imagesArr,
+            videos: videosArr,
+          },
+        },
+        { new: true },
+      )
+      .populate("pCategory", "name")
+      .populate("cityId", "cityName");
+
+    return res.status(200).json({
+      success: true,
+      message: "Category updated successfully",
+      data: updatedCategory,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// ==================== ADMIN ROUTES ====================
+
+// Admin get all pending categories
+exports.adminGetPendingCategories = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const total = await categoryModel.countDocuments({
+      categoryStatus: "pending",
+    });
+
+    const categories = await categoryModel
+      .find({ categoryStatus: "pending" })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate("partnerId", "name email")
+      .populate("pCategory", "name")
+      .populate("cityId", "cityName");
+
+    return res.status(200).json({
+      success: true,
+      message: "Pending categories fetched successfully",
+      data: categories,
+      pagination: {
+        totalRecords: total,
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(total / parseInt(limit)),
+        pageSize: parseInt(limit),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// Admin approve category
+exports.adminApproveCategory = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid categoryId",
+      });
+    }
+
+    const category = await categoryModel.findById(categoryId);
+
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        message: "Category not found",
+      });
+    }
+
+    if (category.categoryStatus !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: `Category is already ${category.categoryStatus}`,
+      });
+    }
+
+    const updatedCategory = await categoryModel
+      .findByIdAndUpdate(
+        categoryId,
+        {
+          $set: {
+            categoryStatus: "approved",
+            rejectionReason: null,
+          },
+        },
+        { new: true },
+      )
+      .populate("partnerId", "name email")
+      .populate("pCategory", "name")
+      .populate("cityId", "cityName");
+
+    return res.status(200).json({
+      success: true,
+      message: "Category approved successfully",
+      data: updatedCategory,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// Admin reject category with reason
+exports.adminRejectCategory = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const { reason } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid categoryId",
+      });
+    }
+
+    if (!reason || reason.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Rejection reason is required",
+      });
+    }
+
+    const category = await categoryModel.findById(categoryId);
+
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        message: "Category not found",
+      });
+    }
+
+    if (category.categoryStatus !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot reject a ${category.categoryStatus} category`,
+      });
+    }
+
+    const updatedCategory = await categoryModel
+      .findByIdAndUpdate(
+        categoryId,
+        {
+          $set: {
+            categoryStatus: "rejected",
+            rejectionReason: reason.trim(),
+          },
+        },
+        { new: true },
+      )
+      .populate("partnerId", "name email")
+      .populate("pCategory", "name")
+      .populate("cityId", "cityName");
+
+    return res.status(200).json({
+      success: true,
+      message: "Category rejected successfully",
+      data: updatedCategory,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};

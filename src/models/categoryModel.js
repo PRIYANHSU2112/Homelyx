@@ -100,6 +100,20 @@ const categoryModel = new mongoose.Schema(
         },
       },
     ],
+    partnerId: {
+      type: objectId,
+      ref: "userModel",
+      default: null,
+    },
+    categoryStatus: {
+      type: String,
+      enum: ["approved", "pending", "rejected"],
+      default: "approved",
+    },
+    rejectionReason: {
+      type: String,
+      default: null,
+    },
   },
   { timestamps: true },
 );

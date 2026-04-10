@@ -120,4 +120,62 @@ router.get(
   isCategory,
   controller.getAllSubCategory,
 );
+
+// ================ Partner Routes ===============
+
+// Partner creates category with pending status
+router.post(
+  "/partner/createCategory/:partnerId",
+  upload.fields([
+    { name: "icon", maxCount: 1 },
+    { name: "banner" },
+    { name: "images" },
+    { name: "videos" },
+  ]),
+  imageValidetion,
+  controller.partnerCreateCategory,
+);
+
+// Partner get their own categories
+router.get(
+  "/partner/myCategories/:partnerId",
+  controller.partnerGetMyCategories,
+);
+
+// Partner update their own category (if pending)
+router.put(
+  "/partner/updateCategory/:categoryId/:partnerId",
+  upload.fields([
+    { name: "icon", maxCount: 1 },
+    { name: "banner" },
+    { name: "images" },
+    { name: "videos" },
+  ]),
+  imageValidetion,
+  controller.partnerUpdateCategory,
+);
+
+// ================ Admin Actions on Partner Categories ===============
+
+// Admin get pending categories for approval
+router.get(
+  "/admin/pendingCategories/:adminId",
+  isCategory,
+  controller.adminGetPendingCategories,
+);
+
+// Admin approve category
+router.patch(
+  "/admin/approveCategory/:categoryId/:adminId",
+  isCategory,
+  controller.adminApproveCategory,
+);
+
+// Admin reject category with reason
+router.patch(
+  "/admin/rejectCategory/:categoryId/:adminId",
+  isCategory,
+  controller.adminRejectCategory,
+);
+
 module.exports = router;
